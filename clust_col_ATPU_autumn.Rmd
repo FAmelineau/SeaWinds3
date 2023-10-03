@@ -1,0 +1,380 @@
+---
+title: "Cluster analysis ATPU autumn"
+author: "FA"
+date: "24 2 2022"
+output: html_document
+---
+
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      results = 'show',
+                      message = FALSE,
+                      warning = FALSE ) # this sets settings for all the script
+
+```
+
+
+
+```{r load packages, echo = FALSE}
+Sys.setenv(TZ='GMT')
+
+
+# packages ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+library(lubridate)
+library(dplyr)
+library(ggplot2)
+library(units)
+library(tidyr)
+library(sf)
+library(factoextra)
+library(rnaturalearth)
+library(sf)
+library(rgdal)
+library(cowplot)
+library(scales)
+library(paletteer) 
+
+# function to get confidence interval of the median via bootstrapping
+
+medianCI = function(x,myquantile){
+  bootmed = apply(matrix(sample(x, rep=TRUE, 10^4*length(x)), nrow=10^4), 1, median, na.rm = T)
+  unname(quantile(bootmed, myquantile, na.rm = T))
+}
+
+
+# parameters ~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+
+# for maps
+world <- ne_countries(scale = "medium", returnclass = "sf") # for plots
+coastline <- ne_coastline(scale = "medium", returnclass = "sf") # for plots
+
+#~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+
+myspec = "ATPU"
+
+bird_data_col = readRDS(paste0(myspec,"_bird_data_col.rds")) 
+bird_data_year = readRDS( paste0(myspec,"_bird_data_year.rds")) 
+
+
+colsum = readRDS( paste0("colony.summary_",myspec,".rds"))
+
+```
+## Distribution of the variables
+
+The mean is in red and the median in black. 
+
+```{r graphs, eval = FALSE, echo = FALSE}
+# exploratory graphs
+
+ggplot(bird_data_year) + geom_histogram(aes(x=  ws)) + 
+  geom_vline(xintercept = mean(bird_data_year$ws), col = "red") +
+  geom_vline(xintercept = median(bird_data_year$ws)) +
+  labs(title = "Wind support (m/s)")
+
+ggplot(bird_data_year) + geom_histogram(aes(x=  rws)) + 
+  geom_vline(xintercept = mean(bird_data_year$rws), col = "red") +
+  geom_vline(xintercept = median(bird_data_year$rws)) +
+  labs(title = "Relative wind support")
+
+ggplot(bird_data_year) + geom_histogram(aes(x=  cw)) + 
+  geom_vline(xintercept = mean(bird_data_year$cw), col = "red") +
+  geom_vline(xintercept = median(bird_data_year$cw)) +
+  labs(title = "Crosswind (m/s)")
+
+ggplot(bird_data_year) + geom_histogram(aes(x=  wspeed)) + 
+  geom_vline(xintercept = mean(bird_data_year$wspeed), col = "red") +
+  geom_vline(xintercept = median(bird_data_year$wspeed)) +
+  labs(title = "Wind speed (m/s)")
+
+ggplot(bird_data_year) + geom_histogram(aes(x=  mon_wspeed_vec)) + 
+  geom_vline(xintercept = mean(bird_data_year$mon_wspeed_vec), col = "red") +
+  geom_vline(xintercept = median(bird_data_year$mon_wspeed_vec)) +
+  labs(title = "Wind speed, monthly mean (vectorial) (m/s)")
+
+ggplot(bird_data_year) + geom_histogram(aes(x=  sd.wdir)) + 
+  geom_vline(xintercept = mean(bird_data_year$sd.wdir), col = "red") +
+  geom_vline(xintercept = median(bird_data_year$sd.wdir)) +
+  labs(title = "SD of wind direction")
+
+ggplot(bird_data_year) + geom_histogram(aes(x=  gspeed)) + 
+  geom_vline(xintercept = mean(bird_data_year$gspeed), col = "red") +
+  geom_vline(xintercept = median(bird_data_year$gspeed)) +
+  labs(title = "Ground speed (m/s)")
+
+ggplot(bird_data_year) + geom_histogram(aes(x=  mean_cond)) + 
+  geom_vline(xintercept = mean(bird_data_year$mean_cond, na.rm=T), col = "red") +
+  geom_vline(xintercept = median(bird_data_year$mean_cond, na.rm=T)) +
+  labs(title = "Mean conductivity")
+
+ggplot(bird_data_year) + geom_histogram(aes(x= detour)) + 
+  geom_vline(xintercept = mean(bird_data_year$detour), col = "red") +
+  geom_vline(xintercept = median(bird_data_year$detour)) +
+  labs(title = "Detour (observed path length/shortest path length")
+
+```
+
+## Clustering with factoextra (K-means)
+
+Variables included in the cluster analysis: ws,cw,wspeed,gspeed,mean_cond,detour,sd.wdir, mon_wspeed 
+
+
+
+```{r cluster , echo =FALSE}
+
+myseason = "autumn"
+
+z2 <- bird_data_col %>% filter( season == myseason)
+
+z <- z2 %>% ungroup() %>% dplyr::select(ws,cw,wspeed,gspeed,mean_cond,detour,sd.wdir, mon_wspeed)
+
+means <- apply(z,2,mean)
+sds <- apply(z,2,sd)
+nor <- scale(z,center=means,scale=sds)
+
+
+get_clust_tendency(nor, 9, graph = FALSE)
+
+
+# fviz_nbclust(nor, kmeans, method = "wss", k.max =9)
+fviz_nbclust(nor, kmeans, method = "silhouette", k.max =9)
+
+
+k2 <- kmeans(nor, centers = 4, nstart = 25)
+fviz_cluster(k2, data = nor)
+
+print(z2$colony)
+
+colclust = data.frame(colony = z2$colony, cluster = k2$cluster )
+
+colsum2 = colsum %>% left_join(colclust)
+
+
+
+colony.sf = colsum2 %>%
+  st_as_sf(coords = c("col_lon","col_lat"), crs = st_crs(4326)) 
+
+
+```
+
+
+## Comparison between clusters 
+
+
+```{r add clusters to datasets ,  echo = FALSE}
+colsum3 = colsum2 %>% dplyr::select(colony,cluster)
+
+bird_data_col = bird_data_col %>% left_join(colsum3)
+bird_data_year = bird_data_year %>% left_join(colsum3)
+rm(colsum3)
+
+
+# clustnames = c("Barents","Iceland", "WNorway","IoM_Faroes")
+clustnames = c("D","A","C","B") 
+
+print(clustnames)
+
+# see tmaptools::palette_explorer() for color names matching tmap colorscale
+# here I used viridis palette 
+# clustcol = viridisLite::viridis(5) 
+
+# other color trial based on this site: https://emilhvitfeldt.github.io/r-color-palettes/discrete.html
+# paletteer package
+
+clustcol = as.character(paletteer_d("colorblindr::OkabeIto_black"))
+
+
+bird_data_year$clustname = factor(clustnames[bird_data_year$cluster], 
+                                  levels = c("A","B","C","D") )
+
+bird_data_year_spring = bird_data_year %>% filter(season=="autumn" & n_ringyear>=5)
+
+
+bird_data_col$clustname = factor(clustnames[bird_data_col$cluster], 
+                                  levels = c("A","B","C","D")  )
+
+bird_data_col_spring = bird_data_col %>% filter(season=="autumn" & n_ringyear>=5)
+
+
+# for map
+colony.sf$clustname = factor(clustnames[colony.sf$cluster], 
+                                  levels = c("A","B","C","D") )
+
+
+# x and y range
+
+  myXrange <- c(-25,  60) # chosen manually 
+  myYrange <- c(55 , 82) 
+ 
+
+set.seed(123)
+
+```
+
+
+```{r plot publi , echo = FALSE}
+
+# non-projected map of the colonies
+# wind support only
+
+  
+
+map = ggplot() +  
+  theme_bw() +
+  geom_sf(data=world ,fill = "gray87", color = "gray87")  +
+  geom_sf(data=coastline, size =0.3 ,color = "black")  +
+  geom_sf(colony.sf, mapping = aes(fill = clustname),colour="grey40",pch=21, size=3) +
+    scale_fill_manual(values = clustcol, name="Clusters")  +
+    coord_sf(xlim=myXrange,ylim=myYrange) +
+  theme(legend.position = "left")  + 
+  labs(title = "Puffins, autumn")
+ 
+
+
+plot1 = ggplot(bird_data_year_spring,aes(x=clustname, y = ws, fill = clustname)) + 
+  theme_classic() +
+  geom_violin(aes(x=clustname, y = ws, fill = clustname), scale = "width") + 
+    geom_pointrange(stat = "summary",
+                  fun = median,  color = "grey30" , shape = 3) +
+  geom_jitter(height = 0, width = 0.05,size = 0.2) + 
+  scale_fill_manual(values = clustcol) + labs(x="", y = expression(Wind~support~(m.s^{-1}))) +
+  theme(legend.position="none") +
+  coord_cartesian(ylim = c(-1.5,10.2))
+
+
+top_row = plot_grid(map, plot1, labels = c("e","f") , rel_widths = c(1.7, 1))
+
+print(top_row) 
+
+ggsave("Fig_clust_1_ATPU_autumn_samescale.png", plot = top_row , width = 6, height = 3, units = "in")
+
+
+```
+
+```{r plot publi supp plot, echo = FALSE}
+
+
+map = ggplot() +  
+  theme_bw() +
+  geom_sf(data=world ,fill = "gray87", color = "gray87")  +
+  geom_sf(data=coastline, size =0.3 ,color = "black")  +
+  geom_sf(colony.sf, mapping = aes(fill = clustname),colour="grey40",pch=21, size=3) +
+    scale_fill_manual(values = clustcol, name="Clusters")  +
+    coord_sf(xlim=myXrange,ylim=myYrange) +
+  theme(legend.position = "left") + 
+  labs(title = "Puffins, autumn")
+ 
+
+
+plot1 = ggplot(bird_data_year_spring,aes(x=clustname, y = ws, fill = clustname)) + 
+  theme_classic() +
+  geom_violin(aes(x=clustname, y = ws, fill = clustname), scale = "width") + 
+    geom_pointrange(stat = "summary",
+                  fun = median,  color = "grey30" , shape = 3) +
+  geom_jitter(height = 0, width = 0.05,size = 0.2) + 
+  scale_fill_manual(values = clustcol) + labs(x="", y = expression(Wind~support~(m.s^{-1}))) +
+  theme(legend.position="none")
+
+plot2 = ggplot(bird_data_year_spring,aes(x=clustname, y = cw, fill = clustname)) + 
+  theme_classic() +
+  geom_violin(aes(x=clustname, y = cw, fill = clustname), scale = "width") + 
+    geom_pointrange(stat = "summary",
+                  fun = median,  color = "grey30" , shape = 3) +
+  geom_jitter(height = 0, width = 0.05,size = 0.2) + 
+    scale_fill_manual(values = clustcol) + labs(x="", y = expression(Cross~wind~(m.s^{-1}))) +
+  theme(legend.position="none")
+
+plot3 = ggplot(bird_data_year_spring,aes(x=clustname, y = wspeed, fill = clustname)) + 
+  theme_classic() +
+  geom_violin(aes(x=clustname, y = wspeed, fill = clustname), scale = "width") + 
+    geom_pointrange(stat = "summary",
+                  fun = median,  color = "grey30" , shape = 3) +
+  geom_jitter(height = 0, width = 0.05,size = 0.2) + 
+    scale_fill_manual(values = clustcol) + labs(x="", y = expression(Wind~speed~(m.s^{-1}))) +
+  theme(legend.position="none")
+
+plot4 = ggplot(bird_data_year_spring,aes(x=clustname, y = mon_wspeed, fill = clustname)) + 
+  theme_classic() +
+  geom_violin(aes(x=clustname, y = mon_wspeed, fill = clustname), scale = "width") + 
+    geom_pointrange(stat = "summary",
+                  fun = median,  color = "grey30" , shape = 3) +
+  geom_jitter(height = 0, width = 0.05,size = 0.2) + 
+    scale_fill_manual(values = clustcol) + labs(x="", y = expression(Monthly~mean~windspeed~(m.s^{-1}))) +
+  theme(legend.position="none")
+
+plot5 = ggplot(bird_data_year_spring,aes(x=clustname, y = sd.wdir, fill = clustname)) + 
+  theme_classic() +
+  geom_violin(aes(x=clustname, y = sd.wdir, fill = clustname), scale = "width") + 
+    geom_pointrange(stat = "summary",
+                  fun = median,  color = "grey30" , shape = 3) +
+  geom_jitter(height = 0, width = 0.05,size = 0.2) + 
+    scale_fill_manual(values = clustcol) + labs(x="", y = "SD wind direction (rad)") +
+  theme(legend.position="none")
+
+plot6 = ggplot(bird_data_year_spring,aes(x=clustname, y = mean_cond, fill = clustname)) + 
+  theme_classic() +
+  geom_violin(aes(x=clustname, y = mean_cond, fill = clustname), scale = "width") + 
+    geom_pointrange(stat = "summary",
+                  fun = median,  color = "grey30" , shape = 3) +
+  geom_jitter(height = 0, width = 0.05,size = 0.2) + 
+    scale_fill_manual(values = clustcol) + labs(x="", y = "Proportion of time wet/24h") +
+  theme(legend.position="none") 
+
+plot7 = ggplot(bird_data_year_spring,aes(x=clustname, y = as.numeric(detour), fill = clustname)) + 
+  theme_classic() +
+  geom_violin(aes(x=clustname, y = as.numeric(detour), fill = clustname), scale = "width") + 
+    geom_pointrange(stat = "summary",
+                  fun = median,  color = "grey30" , shape = 3) +
+  geom_jitter(height = 0, width = 0.05,size = 0.2) + 
+    scale_fill_manual(values = clustcol) + labs(x="", y = "Detour") +
+  theme(legend.position="none") 
+
+
+
+top_row = plot_grid(map, plot1, labels = c("a","b") , rel_widths = c(2, 1))
+middle_row = plot_grid(plot2, plot3, plot4, labels = c("c","d","e"),ncol=3)
+bottom_row = plot_grid(plot5, plot6, plot7, labels = c("f","g","h"),ncol=3)
+
+final = plot_grid(top_row, middle_row, bottom_row,ncol=1)
+
+print(final) 
+
+
+ggsave("Fig_clust_ATPU_autumn_supp_v3.png", plot = final , width = 8, height = 9, units = "in")
+
+```
+
+
+
+
+```{r summary tables, echo = FALSE}
+
+sum = bird_data_year_spring %>% 
+  ungroup() %>% 
+  group_by(clustname) %>% 
+  summarise(
+    ws.CI025 = medianCI(ws,0.025),
+    ws.CI975 = medianCI(ws,0.975),
+    cw.CI025 = medianCI(cw,0.025),
+    cw.CI975 = medianCI(cw,0.975),
+    wspeed.CI025 = medianCI(wspeed,0.025),
+    wspeed.CI975 = medianCI(wspeed,0.975),
+    sd.wdir.CI025 = medianCI(sd.wdir,0.025),
+    sd.wdir.CI975 = medianCI(sd.wdir,0.975),
+    lavdist.CI025 = medianCI(lavdist,0.025),
+    lavdist.CI975 = medianCI(lavdist,0.975),
+
+    ws = median(ws, na.rm=T),
+    cw = median(cw, na.rm=T),
+    wspeed = median(wspeed, na.rm=T),
+    sd.wdir = median(sd.wdir, na.rm=T),
+    lavdist = median(lavdist,na.rm=T))
+
+print(sum)
+print(sum %>% select(clustname,sd.wdir.CI025,sd.wdir.CI975,sd.wdir))
+
+
+write.csv(sum, file = "summary_ATPU_autumn.csv")
+
+```

@@ -1,0 +1,220 @@
+---
+title: "stats_ws_seasons_species"
+author: "FA"
+date: "8 4 2022"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE,
+                      results = 'show',
+                      message = FALSE,
+                      warning = FALSE ) # this sets settings for all the script
+
+library(lme4)
+library(nlme)
+library(dplyr)
+library(ggplot2)
+library(pander)
+library(car)
+library(lmerTest)
+library(MuMIn)
+
+
+```
+
+
+
+```{r data, echo=FALSE}
+atpu = readRDS("ATPU_bird_data_ringyear_season.rds")
+blki = readRDS("BLKI_bird_data_ringyear_season.rds")
+# one value per ringyear and per season 
+
+atpu$species = rep("ATPU", nrow(atpu))
+blki$species = rep("BLKI", nrow(blki))
+
+dat = rbind(atpu,blki)
+rm(atpu,blki)
+
+
+dat = dat %>% dplyr::filter(!is.na(ws))
+
+dat$colony_species = paste(dat$colony,dat$species,sep = "_")
+
+sub = dat %>% dplyr::select(colony_species,year2, ringyear, ws, season, species)
+print(head(sub))
+
+
+
+```
+
+## Data exploration
+
+Cf Zuur et al 2010 MEE
+
+```{r exploration}
+# 1. outliers
+dotchart(dat$ws)
+
+# 2. homogeneity of variance
+
+ggplot(dat, aes(x=season, y = ws)) + geom_boxplot() + facet_grid(cols=vars(species))
+
+# 3. normality 
+
+ggplot(dat, aes(x=ws)) + geom_histogram(binwidth = 0.2)
+
+table(dat$season,dat$species)
+
+ggplot(dat, aes(x=ws)) + geom_histogram() + facet_grid(rows = vars(species,season))
+
+
+
+```
+
+
+
+## Choice of the random effect structure:
+
+We include three random variables: year, colony and invididual, with individual nested in colony.
+
+
+
+```{r random-effect}
+modGLS = gls(ws ~ 1 + season * species, data = dat, method = "REML")
+AIC(modGLS)
+
+modA = lmer(ws ~ season * species + (1 | colony/ring) + (1|year2), data = dat,REML = T)
+AIC(modA)
+
+
+```
+
+## Get fixed effects structure
+
+
+```{r fixed-effect}
+mod0 = lmer(ws ~ 1 + (1 | colony/ring) + (1|year2), data = dat,REML = F)
+AIC(mod0)
+
+mod1 = lmer(ws ~ season * species + (1 | colony/ring) + (1|year2), data = dat,REML = F)
+AIC(mod1)
+
+mod2 = lmer(ws ~ season + species + (1 | colony/ring) + (1|year2), data = dat,REML = F)
+AIC(mod2)
+
+mod3 = lmer(ws ~ season  + (1 | colony/ring) + (1|year2), data = dat,REML = F)
+AIC(mod3)
+
+mod4 = lmer(ws ~ species + (1 | colony/ring) + (1|year2), data = dat,REML = F)
+AIC(mod4)
+
+
+```
+
+## best model in REML
+
+```{r best}
+
+mod1 = lmer(ws ~ season * species + (1 | colony/ring) + (1|year2), data = dat,REML = T)
+AIC(mod1)
+summary(mod1)
+
+confint(mod1, oldNames=FALSE)
+
+plot(mod1)
+qqnorm(resid(mod1))
+qqline(resid(mod1)) # not great but ok 
+
+
+hist(resid(mod1),breaks=20)
+
+
+dat$resid = resid(mod1)
+
+boxplot(dat$resid~dat$colony)
+ggplot(dat, aes(x=season, y = resid)) + geom_boxplot() + facet_grid(cols = vars(species))
+ggplot(dat, aes(x=year2, y = resid)) + geom_boxplot() 
+
+vif(mod1)
+
+r.squaredGLMM(mod1)
+
+```
+
+
+## graph with mean wind support and CI per species and season
+
+Mean +/- CI per species and per season
+
+```{r graph, echo=FALSE, eval = FALSE}
+meanCI = function(x,myquantile){
+  bootmed = apply(matrix(sample(x, rep=TRUE, 10^4*length(x)), nrow=10^4), 1, mean, na.rm = T)
+  unname(quantile(bootmed, myquantile, na.rm = T))
+  
+}
+
+
+dat_spec_seas = dat %>%  
+  group_by(season,species) %>% 
+  summarise(
+    ws.CI025 = meanCI(ws,0.025),
+    ws.CI975 = meanCI(ws,0.975),
+    sd.ws = sd(ws,na.rm=T),
+    ws = mean(ws,na.rm=T),
+    n = n()) 
+
+dat_spec_seas$species2 = ifelse(dat_spec_seas$species=="ATPU", "b. Puffin", "a. Kittiwake")
+dat_spec_seas$se = dat_spec_seas$sd.ws/sqrt(dat_spec_seas$n)
+
+
+
+```
+
+
+## violin plot with mean wind support and CI per species and season
+
+Violin plot asked by reviewer
+Mean +/- CI per species and per season
+
+```{r graph 2, echo=FALSE}
+
+dat$species2 = ifelse(dat$species=="ATPU", "Puffin", "Kittiwake")
+
+# trial with another piece of code https://dbaranger.medium.com/showing-your-data-scatter-box-violin-plots-1f3bb06c8c2b
+
+
+myplot = ggplot(data = dat,aes(x= season, y = ws, fill = species2)) +
+     scale_fill_manual( values = c("yellow","red"), name ="") +
+     geom_violin(alpha=0.4, position = position_dodge(width = .85),color="darkgrey", size = 0.2) +
+     geom_boxplot( width = 0.2,  outlier.size = 0.1, color="black", position = position_dodge(width = .85), notch = TRUE, size = 0.5)  +
+  geom_hline(yintercept =0, linetype="dashed") +
+  labs(x = "Migratory season", y=expression(Wind~support~(m.s^{-1}))) +
+   theme_bw() +
+  theme( panel.grid.major = element_blank(),panel.grid.minor = element_blank(),strip.background = element_blank())
+
+
+
+ggsave(file = "Fig_model1_v3.jpg", plot = myplot , dpi = 300 ,width = 4, height = 3, units = "in")
+
+
+```
+
+
+
+## summary table per species
+
+```{r table per species,eval = FALSE,echo = FALSE}
+
+dat_spec = dat %>%  
+  group_by(species) %>% 
+  summarise(
+    ws.CI025 = meanCI(ws,0.025),
+    ws.CI975 = meanCI(ws,0.975),
+    sd.ws = sd(ws,na.rm=T),
+    ws = mean(ws,na.rm=T),
+    n = n()) 
+
+print(dat_spec)
+```
+
